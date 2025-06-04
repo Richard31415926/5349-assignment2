@@ -1,3 +1,4 @@
+
 import boto3
 import json
 import mysql.connector
@@ -5,6 +6,8 @@ from flask import Flask, request, render_template
 from werkzeug.utils import secure_filename
 from io import BytesIO
 import os
+import time
+import base64
 
 app = Flask(__name__)
 
@@ -59,8 +62,6 @@ def upload_image():
 
     filename = secure_filename(file.filename)
     file_data = file.read()
-    
-    #Add uploads/ prefix to the S3 key
     key = f"uploads/{filename}"
 
     try:
@@ -69,9 +70,32 @@ def upload_image():
     except Exception as e:
         return render_template("upload.html", error=f"S3 Upload Error: {str(e)}")
 
-    # Generate public or presigned file URL
+    # Wait for Lambda-generated caption to appear in the DB
+    caption = "Waiting for caption..."
+    timeout = 10
+    elapsed = 0
+    interval = 1
+
+    while elapsed < timeout:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor(dictionary=True)
+            cur.execute("SELECT caption FROM captions WHERE image_key = %s", (key,))
+            result = cur.fetchone()
+            conn.close()
+            if result and result["caption"]:
+                caption = result["caption"]
+                break
+        except Exception as e:
+            print("DB Error:", e)
+            break
+
+        time.sleep(interval)
+        elapsed += interval
+
+    encoded_image = base64.b64encode(file_data).decode("utf-8")
     file_url = f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{key}"
-    return render_template("upload.html", file_url=file_url, message="File uploaded successfully!")
+    return render_template("upload.html", image_data=encoded_image, file_url=file_url, caption=caption)
 
 @app.route("/gallery")
 def gallery():
